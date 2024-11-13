@@ -99,18 +99,20 @@ def get_balance(client):
     return 0.0
 
 # Fonction pour passer un ordre
-def place_order(client, symbol, side, quantity, leverage):
+def place_order(client, symbol, side, quantity, leverage, reduce_only=False):
     try:
         client.futures_change_leverage(symbol=symbol, leverage=leverage)
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type=ORDER_TYPE_MARKET,
-            quantity=quantity
+            quantity=quantity,
+            reduceOnly=reduce_only  # Assure que l'ordre réduit la position
         )
         print(f"[ORDRE] Ordre {side} exécuté pour {quantity} {symbol}. Détails : {order}")
     except Exception as e:
         print(f"[ERREUR] Erreur lors de l'exécution de l'ordre : {e}")
+
 
 # Fonction pour obtenir le prix actuel du symbole
 def get_symbol_ohlc(client, symbol, interval):
@@ -239,6 +241,34 @@ def get_leverage(client, symbol):
             return int(asset['leverage'])
     return None
 
+
+def calculate_stop_loss_based_on_capital(client, current_position, ohlc_15m, symbol):
+    """
+    Calcule et applique un Stop-Loss basé sur le capital total.
+    """
+    risk_percentage = 0.02  # 2% du capital
+    capital = float(client.futures_account_balance()[0]['balance'])  # Récupérer le capital total
+    max_loss = capital * risk_percentage  # Perte maximale en USDT
+
+    # Calculer le Stop-Loss basé sur le capital pour une position longue
+    if current_position['is_long']:
+        stop_loss = current_position['entry_price'] - (max_loss / abs(current_position['quantity']))
+        print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Niveau de Stop-Loss (Long, basé sur capital) : {stop_loss:.2f}, Prix Actuel : {ohlc_15m['close']:.2f}")
+        
+        if ohlc_15m['close'] <= stop_loss:
+            print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Stop-loss atteint pour la position longue. Clôture.")
+            place_order(client, symbol, SIDE_SELL, abs(current_position['quantity']), current_position['leverage'], reduce_only=True)
+
+    # Calculer le Stop-Loss basé sur le capital pour une position courte
+    elif current_position['is_short']:
+        stop_loss = current_position['entry_price'] + (max_loss / abs(current_position['quantity']))
+        print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Niveau de Stop-Loss (Short, basé sur capital) : {stop_loss:.2f}, Prix Actuel : {ohlc_15m['close']:.2f}")
+        
+        if ohlc_15m['close'] >= stop_loss:
+            print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Stop-loss atteint pour la position courte. Clôture.")
+            place_order(client, symbol, SIDE_BUY, abs(current_position['quantity']), current_position['leverage'], reduce_only=True)
+
+
 def run_live_trading(symbol='BTCUSDT', leverage=10):
     client = initialize_binance()
     # le minimum étant 0.002 sur Testnet Futures
@@ -285,18 +315,14 @@ def run_live_trading(symbol='BTCUSDT', leverage=10):
             print(f"[INDICATEURS] Tenkan-sen (1d): {df_1d['tenkan_sen'].iloc[-1]}, Kijun-sen (1d): {df_15m['kijun_sen'].iloc[-1]}")
             print(f"[INDICATEURS] Senkou Span A (1d): {df_1d['senkou_span_a'].iloc[-1]}, Senkou Span B (1d): {df_1d['senkou_span_b'].iloc[-1]}")
             
-            # Détection de Stop-Loss
-            if current_position and current_position['is_long']:
-                stop_loss = current_position['entry_price'] - (0.02 * current_position['entry_price'] / leverage)
-                if ohlc_15m['close'] <= stop_loss:
-                    print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Stop-loss atteint pour la position longue. Clôture.")
-                    place_order(client, symbol, SIDE_SELL, abs(current_position['quantity']), leverage)
+            # Supposez que vous risquez 2% du capital total
+            risk_percentage = 0.02  # 2%
+            capital = float(client.futures_account_balance()[0]['balance'])  # Récupérer le capital total
+            max_loss = capital * risk_percentage  # Perte maximale en USDT
 
-            elif current_position and current_position['is_short']:
-                stop_loss = current_position['entry_price'] + (0.02 * current_position['entry_price'] / leverage)
-                if ohlc_15m['close'] >= stop_loss:
-                    print(f"{Fore.MAGENTA}[STOP-LOSS]{Style.RESET_ALL} Stop-loss atteint pour la position courte. Clôture.")
-                    place_order(client, symbol, SIDE_BUY, abs(current_position['quantity']), leverage)
+            # Calculer le Stop-Loss basé sur le capital
+            if current_position:
+                calculate_stop_loss_based_on_capital(client, current_position, ohlc_15m, symbol)
 
             # Ouverture de nouvelles positions
             if not current_position and is_bullish_convergence(df_15m, df_1h, df_1d, -1):
