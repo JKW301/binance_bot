@@ -13,7 +13,7 @@ MAX_POSITIONS = 2  # Limite du nombre maximal de positions simultanées
 CSV_FILE = "trading_operations.csv"  # Nom du fichier pour l'enregistrement
 # Clés API pour le Testnet Binance Futures
 API_KEY = '363fb2d8ce63c950476fcbd02ceca08f6375c7d4d720585d65f195fa60cd1893'
-API_SECRET = '033f6910e69b1ea63a2fc24f1a66df9e304bf2050160d531e3dda5802fb6bd4c'
+API_SECRET = '033f6910e69b1ea63a2fc24f1a66df9e304bf2050160d531e3dda5802fb6bd4c' 
 
 # Initialisation de l'API Binance Futures Testnet
 def initialize_binance():
