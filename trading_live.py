@@ -4,11 +4,13 @@ import sys
 import pandas as pd
 from binance.client import Client
 from binance.enums import *
-#from combined_BTC import ichimoku, is_bullish_convergence, is_bearish_convergence
 import csv
 from colorama import Fore, Style, init
 init(autoreset=True)
 
+from ux_load_idle import *
+from strategy_ichimoku import *
+from timeframes import *
 
 MAX_POSITIONS = 2  # Limite du nombre maximal de positions simultanées
 CSV_FILE = "trading_operations.csv"  # Nom du fichier pour l'enregistrement
@@ -22,75 +24,6 @@ def initialize_binance():
     client.FAPI_URL = 'https://testnet.binancefuture.com/fapi/v1'
     return client
 
-def loading_spinner(duration):
-    """Affiche un spinner animé pendant une durée spécifiée."""
-    spinner = ['|', '/', '-', '\\']
-    end_time = time.time() + duration
-    idx = 0
-
-    while time.time() < end_time:
-        sys.stdout.write(f"\r{spinner[idx % len(spinner)]} Chargement en cours...")
-        sys.stdout.flush()
-        time.sleep(0.1)
-        idx += 1
-    
-    sys.stdout.write("\r✔ Chargement terminé!         \n")
-
-def progress_bar_with_sleep(duration):
-    """Affiche une barre de progression pendant une durée spécifiée."""
-    total_steps = 60  # Nombre de segments dans la barre
-    interval = duration / total_steps  # Intervalle de mise à jour
-
-    for step in range(total_steps + 1):
-        percent = (step / total_steps) * 100
-        bar = '=' * step + '-' * (total_steps - step)
-        sys.stdout.write(f"\r[ {bar} ] {percent:.2f}%")
-        sys.stdout.flush()
-        time.sleep(interval)
-    
-    sys.stdout.write("\n✔ Progression terminée!\n")
-
-def log_operation_to_csv(file_name, operation_data):
-    """Enregistre les données d'une opération dans un fichier CSV."""
-    file_exists = os.path.isfile(file_name)
-    with open(file_name, mode='a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=operation_data.keys())
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(operation_data)
-
-def ichimoku(df, tenkan=9, kijun=26, senkou=52):
-    high_tenkan = df['high'].rolling(window=tenkan).max()
-    low_tenkan = df['low'].rolling(window=tenkan).min()
-    df['tenkan_sen'] = (high_tenkan + low_tenkan) / 2
-    high_kijun = df['high'].rolling(window=kijun).max()
-    low_kijun = df['low'].rolling(window=kijun).min()
-    df['kijun_sen'] = (high_kijun + low_kijun) / 2
-    df['senkou_span_a'] = ((df['tenkan_sen'] + df['kijun_sen']) / 2).shift(kijun)
-    high_senkou = df['high'].rolling(window=senkou).max()
-    low_senkou = df['low'].rolling(window=senkou).min()
-    df['senkou_span_b'] = ((high_senkou + low_senkou) / 2).shift(kijun)
-    df['chikou_span'] = df['close'].shift(-kijun)
-
-def is_bullish_convergence(df_15m, df_1h, df_1d, index):
-    return all([
-        df_15m['tenkan_sen'].iloc[index] > df_15m['kijun_sen'].iloc[index],
-        df_15m['tenkan_sen'].iloc[index] > df_15m['senkou_span_a'].iloc[index],
-        df_15m['tenkan_sen'].iloc[index] > df_15m['senkou_span_b'].iloc[index],
-        df_1h['tenkan_sen'].iloc[index] > df_1h['kijun_sen'].iloc[index],
-        df_1d['tenkan_sen'].iloc[index] > df_1d['kijun_sen'].iloc[index]
-    ])
-
-def is_bearish_convergence(df_15m, df_1h, df_1d, index):
-    return all([
-        df_15m['tenkan_sen'].iloc[index] < df_15m['kijun_sen'].iloc[index],
-        df_15m['tenkan_sen'].iloc[index] < df_15m['senkou_span_a'].iloc[index],
-        df_15m['tenkan_sen'].iloc[index] < df_15m['senkou_span_b'].iloc[index],
-        df_1h['tenkan_sen'].iloc[index] < df_1h['kijun_sen'].iloc[index],
-        df_1d['tenkan_sen'].iloc[index] < df_1d['kijun_sen'].iloc[index]
-    ])
-
-
 # Fonction pour récupérer le solde USDT en temps réel
 def get_balance(client):
     account_info = client.futures_account()
@@ -98,97 +31,6 @@ def get_balance(client):
         if asset['asset'] == 'USDT':
             return float(asset['availableBalance'])
     return 0.0
-
-def calculate_stop_loss_price(entry_price, position_size, capital, risk_percent, is_short):
-    risk_amount = capital * (risk_percent / 100)
-    if is_short:
-        stop_price = entry_price + (risk_amount / position_size)
-    else:
-        stop_price = entry_price - (risk_amount / position_size)
-    return stop_price
-
-
-# Fonction pour obtenir le prix actuel du symbole
-def get_symbol_ohlc(client, symbol, interval):
-    """Récupère les données OHLC les plus récentes."""
-    kline = client.futures_klines(symbol=symbol, interval=interval, limit=1)[-1]
-    return {
-        'open': float(kline[1]),
-        'high': float(kline[2]),
-        'low': float(kline[3]),
-        'close': float(kline[4])
-    }
-
-def initialize_dataframes(client, symbol):
-    print("[INIT] Récupération des données historiques pour initialiser les indicateurs.")
-    
-    # Obtenir 100 chandeliers pour chaque intervalle afin de garantir des données complètes
-    klines_15m = client.futures_klines(symbol=symbol, interval='15m', limit=100)
-    klines_1h = client.futures_klines(symbol=symbol, interval='1h', limit=100)
-    klines_1d = client.futures_klines(symbol=symbol, interval='1d', limit=100)
-
-    # Transformer les données en DataFrames
-    df_15m = pd.DataFrame(klines_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 
-                                               'quote_asset_volume', 'number_of_trades', 
-                                               'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-    df_1h = pd.DataFrame(klines_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 
-                                             'quote_asset_volume', 'number_of_trades', 
-                                             'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-    df_1d = pd.DataFrame(klines_1d, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 
-                                             'quote_asset_volume', 'number_of_trades', 
-                                             'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-
-    for df in [df_15m, df_1h, df_1d]:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        df = df[['open', 'high', 'low', 'close']].astype(float)
-
-    return df_15m, df_1h, df_1d
-
-def get_historical_data(client, symbol, interval, limit):
-    klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 
-                                       'quote_asset_volume', 'number_of_trades', 
-                                       'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    df = df[['open', 'high', 'low', 'close']].astype(float)
-    return df
-
-def plot_ichimoku(df, title):
-    plt.figure(figsize=(10, 6))
-    plt.plot(df.index, df['close'], label="Prix de clôture", color='black')
-    plt.plot(df.index, df['tenkan_sen'], label="Tenkan-sen", color='blue')
-    plt.plot(df.index, df['kijun_sen'], label="Kijun-sen", color='red')
-    plt.plot(df.index, df['senkou_span_a'], label="Senkou Span A", color='green', linestyle='--')
-    plt.plot(df.index, df['senkou_span_b'], label="Senkou Span B", color='orange', linestyle='--')
-    plt.fill_between(df.index, df['senkou_span_a'], df['senkou_span_b'], 
-                     where=(df['senkou_span_a'] >= df['senkou_span_b']), color='lightgreen', alpha=0.3)
-    plt.fill_between(df.index, df['senkou_span_a'], df['senkou_span_b'], 
-                     where=(df['senkou_span_a'] < df['senkou_span_b']), color='lightcoral', alpha=0.3)
-    plt.title(title)
-    plt.legend(loc="upper left")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
-
-def update_and_plot(client, symbol):
-    # Récupérer les données historiques pour chaque intervalle
-    df_15m = get_historical_data(client, symbol, '15m', limit=100)
-    df_1h = get_historical_data(client, symbol, '1h', limit=100)
-    df_1d = get_historical_data(client, symbol, '1d', limit=100)
-
-    # Calcul des indicateurs Ichimoku
-    print("[ICHIMOKU] Calcul des indicateurs Ichimoku pour chaque intervalle...")
-    ichimoku(df_15m)
-    ichimoku(df_1h)
-    ichimoku(df_1d)
-
-    # Afficher les graphiques pour chaque intervalle
-    print("[PLOT] Affichage des graphiques Ichimoku...")
-    plot_ichimoku(df_15m, "Ichimoku - Intervalle 15m")
-    plot_ichimoku(df_1h, "Ichimoku - Intervalle 1h")
-    plot_ichimoku(df_1d, "Ichimoku - Intervalle 1d")
 
 def get_position_details(client, symbol):
     """
@@ -235,21 +77,51 @@ def get_leverage(client, symbol):
             return int(asset['leverage'])
     return None
 
-def place_stop_loss_order(client, symbol, quantity, stop_price, limit_price): 
-    try: 
-            order = client.create_order(
-            symbol=symbol, 
-            side=Client.SIDE_SELL, 
-            type=Client.ORDER_TYPE_STOP_LOSS_LIMIT, 
+def calculate_stop_loss_price(entry_price, position_size, capital, risk_percent, is_short):
+    risk_amount = capital * (risk_percent / 100)
+    if is_short:
+        stop_price = entry_price + (risk_amount / position_size)
+    else:
+        stop_price = entry_price - (risk_amount / position_size)
+    return stop_price
+
+def place_stop_loss_order(client, symbol, quantity, entry_price, risk_percent, is_short):
+    """
+    Place un ordre Stop Loss sur Binance Futures.
+    """
+    try:
+        # Obtenir les informations du symbole
+        symbol_info = get_symbol_info(client, symbol)
+        price_precision = symbol_info['pricePrecision']
+        quantity_precision = symbol_info['quantityPrecision']
+
+        # Calculer le Stop Price en fonction du risque
+        risk_amount = (entry_price * risk_percent) / 100
+        stop_price = entry_price + risk_amount if is_short else entry_price - risk_amount
+
+        # Ajuster le prix et la quantité aux précisions
+        stop_price = adjust_precision(stop_price, price_precision)
+        quantity = adjust_precision(quantity, quantity_precision)
+
+        # Type de l'ordre (BUY pour short, SELL pour long)
+        side = Client.SIDE_BUY if is_short else Client.SIDE_SELL
+
+        # Placer l'ordre Stop Loss
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type='STOP_MARKET',
+            stopPrice=stop_price,  # Assurez-vous que ce paramètre est envoyé
             quantity=quantity,
-            price=limit_price, 
-            stopPrice=stop_price,
-            timeInForce=Client.TIME_IN_FORCE_GTC
-            )
-            return order 
-    except Exception as e: 
-        print(f"Une erreur est survenue : {e}") 
+            timeInForce='GTC'  # Good Till Cancel
+        )
+        print(f"[STOP-LOSS] Ordre placé avec succès : {order}")
+        return order
+
+    except Exception as e:
+        print(f"[ERREUR] Impossible de placer l'ordre Stop Loss : {e}")
         return None
+
 
 def get_existing_stop_loss(client, symbol):
     """
@@ -281,6 +153,30 @@ def check_stop_loss_order(client, symbol, position):
         if order['type'] == 'STOP_MARKET' and float(order['origQty']) == abs(position['quantity']):
             return True
     return False
+
+def get_stop_loss_details(client, symbol):
+    """
+    Récupère les détails de l'ordre Stop Loss actif pour un symbole donné.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if order['type'] in ['STOP_MARKET', 'STOP_LOSS_LIMIT']:
+                stop_price = float(order['stopPrice'])
+                quantity = float(order['origQty'])
+                print(f"[STOP-LOSS] Stop-loss actif pour {symbol}:")
+                print(f" - Stop Price: {stop_price}")
+                print(f" - Quantity: {quantity}")
+                return {
+                    "stop_price": stop_price,
+                    "quantity": quantity
+                }
+        print(f"[STOP-LOSS] Aucun stop-loss actif trouvé pour {symbol}.")
+        return None
+    except Exception as e:
+        print(f"[ERREUR] Impossible de récupérer les détails du stop-loss : {e}")
+        return None
+
 
 def run_live_trading(symbol='BTCUSDT', leverage=10):
     client = initialize_binance()
@@ -340,33 +236,22 @@ def run_live_trading(symbol='BTCUSDT', leverage=10):
             if current_position:
                 print(f"[POSITIONS] Gestion de la position actuelle : {current_position}")
 
-                # Obtenez les informations de précision pour l'actif
-                symbol_info = get_symbol_info(client, symbol)
-                quantity_precision = symbol_info['quantityPrecision']
-                price_precision = symbol_info['pricePrecision']
-
-                # Ajustez la précision de la quantité et du prix
-                quantity = adjust_precision(abs(current_position['quantity']), quantity_precision)
-                stop_price = adjust_precision(current_position['entry_price'] * (1 + 0.01 if current_position['is_short'] else -0.01), price_precision)
-
-                # Placez un nouvel ordre stop-loss
-                try:
-                    stop_loss_order = client.futures_create_order(
-                        symbol=symbol,
-                        side='BUY' if current_position['is_short'] else 'SELL',
-                        type='STOP_MARKET',
-                        stopPrice=stop_price,
-                        quantity=quantity
-                    )
-                    print("[STOP-LOSS] Placement d'un nouvel ordre stop-loss.")
-                except Exception as e:
-                    print(f"Une erreur est survenue : {e}")
-
-                # Vérifiez si le stop-loss a bien été ajouté
-                if check_stop_loss_order(client, symbol, current_position):
-                    print("[STOP-LOSS] L'ordre stop-loss a été ajouté avec succès.")
+                if current_position['has_stop_loss']:
+                    print("[STOP-LOSS] Un ordre stop-loss est déjà actif pour cette position.")
+                    stop_loss_details = get_stop_loss_details(client, symbol)
+                    if stop_loss_details:
+                        print(f"[INFO] Stop-loss actuel : {stop_loss_details['stop_price']} pour une quantité de {stop_loss_details['quantity']}.")
                 else:
-                    print("[STOP-LOSS] Échec de l'ajout de l'ordre stop-loss.")
+                    # Placez un nouvel ordre Stop Loss
+                    place_stop_loss_order(
+                        client=client,
+                        symbol=symbol,
+                        quantity=current_position['quantity'],
+                        entry_price=current_position['entry_price'],
+                        risk_percent=2,  # Risque de 2%
+                        is_short=current_position['is_short']
+                    )
+
 
 
             # Ouverture de nouvelles positions
@@ -438,8 +323,6 @@ def place_order(client, symbol, side, quantity, leverage, reduce_only=False):
         print(f"[ORDRE] Ordre {side} exécuté pour {quantity} {symbol}. Détails : {order}")
     except Exception as e:
         print(f"[ERREUR] Erreur lors de l'exécution de l'ordre : {e}")
-
-
 
 
 # Exécution du trading en direct
