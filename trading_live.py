@@ -147,7 +147,7 @@ def calculate_stop_loss_price(entry_price, position_size, capital, risk_percent,
     print("stop price : ", stop_price)
     return stop_price
 
-def place_stop_loss_order(client, symbol, quantity, entry_price, risk_percent, is_short, leverage, capital):
+def place_stop_loss_order(client, symbol, entry_price, risk_percent, is_short, leverage, capital, percentage):
     """
     Place un ordre Stop Loss sur Binance Futures en respectant un risque cible et les contraintes.
     """
@@ -163,10 +163,25 @@ def place_stop_loss_order(client, symbol, quantity, entry_price, risk_percent, i
             print(f"[ERREUR] Contraintes introuvables pour le symbole {symbol}.")
             return
 
-        tick_size = constraints.get('tickSize', 0.1)  # Valeur par défaut pour BTCUSDT
-        quantity_precision = constraints.get('quantityPrecision', 3)
+        tick_size = constraints.get('tickSize', 0.1)
+        step_size = constraints.get('stepSize', 0.001)
+        min_notional = constraints.get('minNotional', 5)
 
-        print(f"[CONTRAINTES] tickSize={tick_size}, quantityPrecision={quantity_precision}")
+        print(f"[CONTRAINTES] tickSize={tick_size}, stepSize={step_size}, minNotional={min_notional}")
+
+        # Calculer la quantité dynamique
+        quantity = calculate_quantity(
+            capital=capital,
+            entry_price=entry_price,
+            percentage=percentage,
+            tick_size=tick_size,
+            step_size=step_size,
+            min_notional=min_notional
+        )
+
+        if quantity <= 0:
+            print("[ERREUR] La quantité calculée est invalide.")
+            return
 
         # Calculer le Stop Price
         stop_price = calculate_stop_loss_price(
@@ -179,14 +194,7 @@ def place_stop_loss_order(client, symbol, quantity, entry_price, risk_percent, i
             tick_size=tick_size
         )
 
-        # Ajuster la quantité
-        quantity = adjust_precision(abs(quantity), quantity_precision)
-
         print(f"[STOP-LOSS] Calculé : stopPrice={stop_price}, quantity={quantity}")
-
-        if quantity <= 0:
-            print("[ERREUR] La quantité calculée est invalide.")
-            return
 
         # Définir le type de l'ordre
         side = Client.SIDE_BUY if is_short else Client.SIDE_SELL
@@ -208,6 +216,7 @@ def place_stop_loss_order(client, symbol, quantity, entry_price, risk_percent, i
     except Exception as e:
         print(f"[ERREUR] Impossible de placer l'ordre Stop Loss : {e}")
         return None
+
 
 
 def get_existing_stop_loss(client, symbol):
@@ -304,10 +313,51 @@ def calculate_quantity(capital, entry_price, percentage, tick_size, step_size, m
 
     return quantity
 
+def has_active_stop_loss(client, symbol, position):
+    """
+    Vérifie s'il existe un ordre STOP_MARKET actif cohérent avec la position actuelle.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if order['type'] == 'STOP_MARKET':
+                # Vérifier la quantité et le stopPrice
+                if float(order['origQty']) == abs(position['quantity']) and float(order['stopPrice']) == position['stop_price']:
+                    print(f"[INFO] Stop-loss actif correspondant trouvé : {order}")
+                    return True
+        return False
+    except Exception as e:
+        print(f"[ERREUR] Erreur lors de la vérification des ordres actifs : {e}")
+        return False
 
-def run_live_trading(symbol='BTCUSDT', leverage=10):
+
+def debug_open_orders(client, symbol):
+    """
+    Affiche les détails des ordres ouverts pour debug.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            print(f"[DEBUG] Détails de l'ordre : {order}")
+    except Exception as e:
+        print(f"[ERREUR] Impossible de récupérer les détails des ordres : {e}")
+
+def cancel_duplicate_stop_orders(client, symbol):
+    """
+    Annule tous les ordres STOP_MARKET ouverts pour un symbole donné.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if order['type'] == 'STOP_MARKET':
+                print(f"[INFO] Annulation de l'ordre en doublon : {order}")
+                client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+    except Exception as e:
+        print(f"[ERREUR] Impossible d'annuler les ordres : {e}")
+
+
+def run_live_trading(symbol='BTCUSDT', leverage=10, percentage=5):
     client = initialize_binance()
-    position_size = 0.002  # Taille minimale sur Testnet Futures
 
     # Vérifiez les permissions de l'API key
     try:
@@ -322,6 +372,7 @@ def run_live_trading(symbol='BTCUSDT', leverage=10):
 
     print("[INFO] Début du trading en direct en utilisant les données OHLC avec historique.")
     while True:
+        #debug_open_orders(client, symbol)
 
         # Récupérer le capital disponible
         capital = get_balance(client)
@@ -360,100 +411,66 @@ def run_live_trading(symbol='BTCUSDT', leverage=10):
             ichimoku(df_1d)
 
             # Supposez que vous risquez 2 % du capital total
-            risk_percentage = 0.02
-            max_loss = capital * risk_percentage
+            risk_percent = 2
 
             # Gestion du Stop-Loss pour une position existante
             if current_position:
                 print(f"[POSITIONS] Gestion de la position actuelle : {current_position}")
 
-                if current_position['has_stop_loss']:
+                # Annuler les ordres STOP_MARKET en doublon
+                cancel_duplicate_stop_orders(client, symbol)
+
+                if has_active_stop_loss(client, symbol, current_position):
                     print("[STOP-LOSS] Un ordre stop-loss est déjà actif pour cette position.")
-                    stop_loss_details = get_stop_loss_details(client, symbol)
-                    if stop_loss_details:
-                        print(f"[INFO] Stop-loss actuel : {stop_loss_details['stop_price']} pour une quantité de {stop_loss_details['quantity']}.")
                 else:
-                    # Placez un nouvel ordre Stop Loss
+                    print("[STOP-LOSS] Pas de stoploss en cours. Placement d'un nouvel ordre.")
                     place_stop_loss_order(
                         client=client,
                         symbol=symbol,
-                        quantity=abs(current_position['quantity']),
                         entry_price=current_position['entry_price'],
-                        risk_percent=2,  # Risque de 2%
+                        risk_percent=risk_percent,
                         is_short=current_position['is_short'],
-                        leverage=current_position['leverage'],  # Ajout de l'effet de levier
-                        capital=capital  # Ajout du capital total disponible
+                        leverage=current_position['leverage'],
+                        capital=capital,
+                        percentage=percentage
                     )
 
-
-
             # Ouverture de nouvelles positions
-            stop_loss_price = None  # Initialisation
             if not current_position and is_bullish_convergence(df_15m, df_1h, df_1d, -1):
                 print(f"{Fore.GREEN}[SIGNAL]{Style.RESET_ALL} Signal d'achat détecté. Ouverture d'une position longue.")
 
-                # Calcul du stop-loss pour une nouvelle position longue
+                # Calcul de la quantité dynamique pour l'achat
                 entry_price = ohlc_15m['close']
-                stop_price = entry_price - (max_loss / position_size)
-                limit_price = stop_price - 10
-
-                # Passer la commande
-                place_order(client, symbol, SIDE_BUY, position_size, leverage, stop_price)
-
-                # Placer le stop-loss
-                place_stop_loss_order(
-                    client=client,
-                    symbol=symbol,
-                    quantity=abs(current_position['quantity']),
-                    entry_price=current_position['entry_price'],
-                    risk_percent=2,  # Risque de 2%
-                    is_short=current_position['is_short'],
-                    leverage=current_position['leverage'],  # Ajout de l'effet de levier
-                    capital=capital  # Ajout du capital total disponible
+                constraints = get_symbol_constraints(client, symbol)
+                quantity = calculate_quantity(
+                    capital=capital,
+                    entry_price=entry_price,
+                    percentage=percentage,
+                    tick_size=constraints['tickSize'],
+                    step_size=constraints['stepSize'],
+                    min_notional=constraints['minNotional']
                 )
-                # Enregistrement de l'opération
-                operation_data = {
-                    "timestamp": pd.Timestamp.now(),
-                    "symbol": symbol,
-                    "side": "BUY",
-                    "quantity": position_size,
-                    "leverage": leverage,
-                    "stop_loss_price": stop_price
-                }
-                log_operation_to_csv(CSV_FILE, operation_data)
+
+                if quantity > 0:
+                    place_order(client, symbol, SIDE_BUY, quantity, leverage)
 
             elif not current_position and is_bearish_convergence(df_15m, df_1h, df_1d, -1):
                 print(f"{Fore.RED}[SIGNAL]{Style.RESET_ALL} Signal de vente détecté. Ouverture d'une position courte.")
 
-                # Calcul du stop-loss pour une nouvelle position courte
+                # Calcul de la quantité dynamique pour la vente
                 entry_price = ohlc_15m['close']
-                stop_price = entry_price + (max_loss / position_size)
-                limit_price = stop_price + 10
-
-                # Passer la commande
-                place_order(client, symbol, SIDE_SELL, position_size, leverage, stop_price)
-
-                # Placer le stop-loss
-                place_stop_loss_order(
-                    client=client,
-                    symbol=symbol,
-                    quantity=abs(current_position['quantity']),
-                    entry_price=current_position['entry_price'],
-                    risk_percent=2,  # Risque de 2%
-                    is_short=current_position['is_short'],
-                    leverage=current_position['leverage'],  # Ajout de l'effet de levier
-                    capital=capital  # Ajout du capital total disponible
+                constraints = get_symbol_constraints(client, symbol)
+                quantity = calculate_quantity(
+                    capital=capital,
+                    entry_price=entry_price,
+                    percentage=percentage,
+                    tick_size=constraints['tickSize'],
+                    step_size=constraints['stepSize'],
+                    min_notional=constraints['minNotional']
                 )
-                # Enregistrement de l'opération
-                operation_data = {
-                    "timestamp": pd.Timestamp.now(),
-                    "symbol": symbol,
-                    "side": "SELL",
-                    "quantity": position_size,
-                    "leverage": leverage,
-                    "stop_loss_price": stop_price
-                }
-                log_operation_to_csv(CSV_FILE, operation_data)
+
+                if quantity > 0:
+                    place_order(client, symbol, SIDE_SELL, quantity, leverage)
 
         # Attente de 60 secondes avant la prochaine vérification
         print(f"{Fore.BLUE}[ATTENTE]{Style.RESET_ALL} Attente de 60 secondes avant la prochaine vérification...")
