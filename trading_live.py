@@ -7,108 +7,17 @@ from binance.enums import *
 import csv
 from colorama import Fore, Style, init
 init(autoreset=True)
+from threading import Event
 
 from ux_load_idle import *
 from strategy_ichimoku import *
 from timeframes import *
-
-from threading import Event
+from stop_loss_related import *
+from account import *
+from positions import *
 
 stop_event = Event()  # Importé dans le script principal
 
-
-MAX_POSITIONS = 2  # Limite du nombre maximal de positions simultanées
-CSV_FILE = "trading_operations.csv"  # Nom du fichier pour l'enregistrement
-# Clés API pour le Testnet Binance Futures
-API_KEY = '363fb2d8ce63c950476fcbd02ceca08f6375c7d4d720585d65f195fa60cd1893'
-API_SECRET = '033f6910e69b1ea63a2fc24f1a66df9e304bf2050160d531e3dda5802fb6bd4c' 
-
-# Initialisation de l'API Binance Futures Testnet
-def initialize_binance():
-    client = Client(API_KEY, API_SECRET, testnet=True)
-    client.FAPI_URL = 'https://testnet.binancefuture.com/fapi/v1'
-    return client
-
-# Fonction pour récupérer le solde USDT en temps réel
-def get_balance(client):
-    """
-    Récupère le solde disponible en USDT pour le compte Binance Futures.
-    """
-    try:
-        account_info = client.futures_account()
-        for asset in account_info['assets']:
-            if asset['asset'] == 'USDT':
-                return float(asset['availableBalance'])  # Solde disponible
-        print("[ERREUR] Impossible de trouver le solde en USDT.")
-        return 0.0
-    except Exception as e:
-        print(f"[ERREUR] Erreur lors de la récupération du solde : {e}")
-        return 0.0
-
-
-def get_position_details(client, symbol):
-    """
-    Interroge Binance pour récupérer les informations des positions ouvertes pour un symbole.
-    """
-    positions = client.futures_position_information()
-    for position in positions:
-        if position['symbol'] == symbol:
-            qty = float(position['positionAmt'])
-            entry_price = float(position['entryPrice'])
-            
-            # Récupérer l'effet de levier configuré
-            leverage = get_leverage(client, symbol)
-            if leverage is None:
-                print(f"{Fore.RED}[ERREUR]{Style.RESET_ALL} Impossible de récupérer l'effet de levier pour {symbol}. Valeur par défaut : 1")
-                leverage = 1
-            
-            # Vérifier si un stop-loss existe pour cette position
-            has_stop_loss = check_stop_loss_order(client, symbol, {"quantity": qty})
-            
-            return {
-                "quantity": qty,
-                "entry_price": entry_price,
-                "leverage": leverage,
-                "is_long": qty > 0,
-                "is_short": qty < 0,
-                "has_stop_loss": has_stop_loss
-            }
-    return None
-
-def count_open_positions_count(client):
-    """Retourne le nombre total de positions ouvertes sur le compte."""
-    positions = client.futures_position_information()
-    open_positions = [pos for pos in positions if float(pos['positionAmt']) != 0]
-    return len(open_positions)
-
-def get_leverage(client, symbol):
-    """
-    Récupère l'effet de levier configuré pour un symbole donné dans Binance Futures.
-    """
-    account_info = client.futures_account()
-    for asset in account_info['positions']:
-        if asset['symbol'] == symbol:
-            return int(asset['leverage'])
-    return None
-
-def get_symbol_constraints(client, symbol):
-    """
-    Récupère les contraintes spécifiques (tickSize, minPrice, etc.) pour un symbole donné.
-    """
-    try:
-        exchange_info = client.futures_exchange_info()
-        for s in exchange_info['symbols']:
-            if s['symbol'] == symbol:
-                constraints = {}
-                for f in s['filters']:
-                    if f['filterType'] == 'PRICE_FILTER':
-                        constraints['tickSize'] = float(f['tickSize'])
-                    if f['filterType'] == 'MIN_NOTIONAL':
-                        constraints['minNotional'] = float(f['notional'])
-                return constraints
-    except Exception as e:
-        print(f"[ERREUR] Impossible de récupérer les contraintes du symbole {symbol} : {e}")
-        return None
 """
     print ("capital : ", capital)
     print("risk percent : ", risk_percent)
@@ -119,33 +28,6 @@ def get_symbol_constraints(client, symbol):
     print("loss per unit : ", loss_per_unit)
     print("stop price : ", stop_price)
 """
-
-def calculate_stop_loss_price(entry_price, position_size, capital, risk_percent, is_short, leverage, tick_size):
-    """
-    Calcule un stop-loss correct basé sur le risque maximal autorisé.
-    """
-    # Calcul du risque maximal autorisé (en USDT)
-    risk_amount = capital * (risk_percent / 100)
-    print ("capital : ", capital)
-    print("risk percent : ", risk_percent)
-    print("risk amount : ", risk_amount)
-    print("position size : ", position_size)
-    print("leverage : ", leverage)
-    # Calcul de la perte par unité de BTC, en tenant compte du levier
-    loss_per_unit = risk_amount / (position_size * leverage)
-
-    # Calcul du stop-loss
-    if is_short:
-        stop_price = entry_price + loss_per_unit  # Pour une position short
-    else:
-        stop_price = entry_price - loss_per_unit  # Pour une position longue
-
-    # Ajustement du prix avec le tickSize
-    stop_price = adjust_precision(stop_price, tick_size)
-    print("entry price : ", entry_price)
-    print("loss per unit : ", loss_per_unit)
-    print("stop price : ", stop_price)
-    return stop_price
 
 def place_stop_loss_order(client, symbol, entry_price, risk_percent, is_short, leverage, capital, percentage):
     """
@@ -216,145 +98,6 @@ def place_stop_loss_order(client, symbol, entry_price, risk_percent, is_short, l
     except Exception as e:
         print(f"[ERREUR] Impossible de placer l'ordre Stop Loss : {e}")
         return None
-
-
-
-def get_existing_stop_loss(client, symbol):
-    """
-    Vérifie s'il existe un ordre stop-loss actif pour le symbole.
-    """
-    try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for order in open_orders:
-            if order['type'] == 'STOP_MARKET' and order['reduceOnly']:
-                return order  # Retourne l'ordre existant
-        return None
-    except Exception as e:
-        print(f"Erreur lors de la récupération des ordres actifs : {e}")
-        return None
-
-def get_symbol_info(client, symbol):
-    exchange_info = client.futures_exchange_info()
-    for s in exchange_info['symbols']:
-        if s['symbol'] == symbol:
-            return s
-    return None
-
-def adjust_precision(value, tick_size):
-    """
-    Ajuste une valeur donnée à la précision définie par le tickSize.
-    """
-    return round(value - (value % tick_size), len(str(tick_size).split('.')[-1]))
-
-
-def check_stop_loss_order(client, symbol, position):
-    orders = client.futures_get_open_orders(symbol=symbol)
-    for order in orders:
-        if order['type'] == 'STOP_MARKET' and float(order['origQty']) == abs(position['quantity']):
-            return True
-    return False
-
-def get_stop_loss_details(client, symbol):
-    """
-    Récupère les détails de l'ordre Stop Loss actif pour un symbole donné.
-    """
-    try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for order in open_orders:
-            if order['type'] in ['STOP_MARKET', 'STOP_LOSS_LIMIT']:
-                stop_price = float(order['stopPrice'])
-                quantity = float(order['origQty'])
-                print(f"[STOP-LOSS] Stop-loss actif pour {symbol}:")
-                print(f" - Stop Price: {stop_price}")
-                print(f" - Quantity: {quantity}")
-                return {
-                    "stop_price": stop_price,
-                    "quantity": quantity
-                }
-        print(f"[STOP-LOSS] Aucun stop-loss actif trouvé pour {symbol}.")
-        return None
-    except Exception as e:
-        print(f"[ERREUR] Impossible de récupérer les détails du stop-loss : {e}")
-        return None
-
-# Fonction pour passer un ordre
-def place_order(client, symbol, side, quantity, leverage, reduce_only=False):
-    try:
-        client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        order = client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type=ORDER_TYPE_MARKET,
-            quantity=quantity,
-            reduceOnly=reduce_only  # Assure que l'ordre réduit la position
-        )
-        print(f"[ORDRE] Ordre {side} exécuté pour {quantity} {symbol}. Détails : {order}")
-    except Exception as e:
-        print(f"[ERREUR] Erreur lors de l'exécution de l'ordre : {e}")
-
-def calculate_quantity(capital, entry_price, percentage, tick_size, step_size, min_notional):
-    """
-    Calcule une quantité dynamique en fonction du capital, du prix d'entrée, et des contraintes Binance.
-    """
-    # Capital engagé en fonction du pourcentage
-    capital_engaged = capital * (percentage / 100)
-
-    # Calcul initial de la quantité
-    quantity = capital_engaged / entry_price
-
-    # Ajustement avec stepSize (lotSize)
-    quantity = math.floor(quantity / step_size) * step_size
-
-    # Vérification de la valeur notionnelle minimale
-    notional = quantity * entry_price
-    if notional < min_notional:
-        print(f"[ERREUR] Quantité calculée ({quantity}) est inférieure à la valeur notionnelle minimale ({min_notional}).")
-        return 0.0
-
-    return quantity
-
-def has_active_stop_loss(client, symbol, position):
-    """
-    Vérifie s'il existe un ordre STOP_MARKET actif cohérent avec la position actuelle.
-    """
-    try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for order in open_orders:
-            if order['type'] == 'STOP_MARKET':
-                # Vérifier la quantité et le stopPrice
-                if float(order['origQty']) == abs(position['quantity']) and float(order['stopPrice']) == position['stop_price']:
-                    print(f"[INFO] Stop-loss actif correspondant trouvé : {order}")
-                    return True
-        return False
-    except Exception as e:
-        print(f"[ERREUR] Erreur lors de la vérification des ordres actifs : {e}")
-        return False
-
-
-def debug_open_orders(client, symbol):
-    """
-    Affiche les détails des ordres ouverts pour debug.
-    """
-    try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for order in open_orders:
-            print(f"[DEBUG] Détails de l'ordre : {order}")
-    except Exception as e:
-        print(f"[ERREUR] Impossible de récupérer les détails des ordres : {e}")
-
-def cancel_duplicate_stop_orders(client, symbol):
-    """
-    Annule tous les ordres STOP_MARKET ouverts pour un symbole donné.
-    """
-    try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for order in open_orders:
-            if order['type'] == 'STOP_MARKET':
-                print(f"[INFO] Annulation de l'ordre en doublon : {order}")
-                client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
-    except Exception as e:
-        print(f"[ERREUR] Impossible d'annuler les ordres : {e}")
-
 
 def run_live_trading(symbol='BTCUSDT', leverage=10, percentage=5):
     client = initialize_binance()
