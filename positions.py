@@ -1,21 +1,9 @@
-import math
-import time
-import sys
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
-import csv
+#!/usr/bin/env python3
+
 from colorama import Fore, Style, init
 init(autoreset=True)
 
-
-from ux_load_idle import *
-from strategy_ichimoku import *
-from timeframes import *
-#from stop_loss_related import check_stop_loss_order
-from stop_loss_related import *
-from account import *
-from positions import *
+from imports import *
 
 def get_position_details(client, symbol):
     """
@@ -88,11 +76,7 @@ def get_symbol_info(client, symbol):
             return s
     return None
 
-def adjust_precision(value, tick_size):
-    """
-    Ajuste une valeur donnée à la précision définie par le tickSize.
-    """
-    return round(value - (value % tick_size), len(str(tick_size).split('.')[-1]))
+
 
 # Fonction pour passer un ordre
 def place_order(client, symbol, side, quantity, leverage, reduce_only=False):

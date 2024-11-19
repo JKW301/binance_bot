@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import math
 import time
 import sys
@@ -9,12 +10,8 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 from threading import Event
 
-from ux_load_idle import *
-from strategy_ichimoku import *
-from timeframes import *
-from stop_loss_related import *
-from account import *
-from positions import *
+from imports import *
+
 
 stop_event = Event()  # Importé dans le script principal
 

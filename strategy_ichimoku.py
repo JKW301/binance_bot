@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import math
 import time
 import sys
@@ -8,6 +9,8 @@ from ux_load_idle import *
 import csv
 from colorama import Fore, Style, init
 init(autoreset=True)
+
+from imports import *
 
 def ichimoku(df, tenkan=9, kijun=26, senkou=52):
     high_tenkan = df['high'].rolling(window=tenkan).max()

@@ -1,11 +1,6 @@
-import math
-import time
-import sys
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
-#from combined_BTC import ichimoku, is_bullish_convergence, is_bearish_convergence
-import csv
+#!/usr/bin/env python3
+from imports import *
+
 from colorama import Fore, Style, init
 init(autoreset=True)
 

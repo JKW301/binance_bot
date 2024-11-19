@@ -1,20 +1,13 @@
-import math
-import time
-import sys
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
-import csv
+#!/usr/bin/env python3
+from imports import *
+
 from colorama import Fore, Style, init
 init(autoreset=True)
-
-
-from ux_load_idle import *
-from strategy_ichimoku import *
-from timeframes import *
-from stop_loss_related import *
-from account import *
-from positions import *
+def adjust_precision(value, tick_size):
+    """
+    Ajuste une valeur donnée à la précision définie par le tickSize.
+    """
+    return round(value - (value % tick_size), len(str(tick_size).split('.')[-1]))
 
 def calculate_stop_loss_price(entry_price, position_size, capital, risk_percent, is_short, leverage, tick_size):
     """
@@ -60,11 +53,22 @@ def get_existing_stop_loss(client, symbol):
 
 
 def check_stop_loss_order(client, symbol, position):
-    orders = client.futures_get_open_orders(symbol=symbol)
-    for order in orders:
-        if order['type'] == 'STOP_MARKET' and float(order['origQty']) == abs(position['quantity']):
-            return True
-    return False
+    """
+    Vérifie s'il existe un ordre STOP_MARKET actif pour une position donnée.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if (
+                order['type'] == 'STOP_MARKET' and
+                float(order['origQty']) == abs(position['quantity'])
+            ):
+                return True
+        return False
+    except Exception as e:
+        print(f"[ERREUR] Impossible de vérifier les ordres actifs : {e}")
+        return False
+
 
 def get_stop_loss_details(client, symbol):
     """
