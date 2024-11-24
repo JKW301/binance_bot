@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+import os
 from imports import *
 from colorama import Fore, Style, init
+from binance.client import Client  # Assurez-vous que Client est bien importé ici
 init(autoreset=True)
 
+# Charger les variables d'environnement
+load_dotenv()
 
 MAX_POSITIONS = 2  # Limite du nombre maximal de positions simultanées
 CSV_FILE = "trading_operations.csv"  # Nom du fichier pour l'enregistrement
+
 # Clés API pour le Testnet Binance Futures
 API_KEY = os.getenv('API_KEY')
 API_SECRET = os.getenv('API_SECRET')
+
+# Vérifiez si les clés API sont chargées
+if not API_KEY or not API_SECRET:
+    print(f"{Fore.RED}[ERREUR] Les clés API ne sont pas définies. Vérifiez votre fichier .env.{Style.RESET_ALL}")
+    exit(1)
+
 # Initialisation de l'API Binance Futures Testnet
 def initialize_binance():
     client = Client(API_KEY, API_SECRET, testnet=True)

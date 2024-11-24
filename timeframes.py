@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-import math
-import time
-import sys
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
-import csv
-from colorama import Fore, Style, init
-init(autoreset=True)
+
 from imports import *
 
 
