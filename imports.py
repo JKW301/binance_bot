@@ -6,6 +6,7 @@ import pandas as pd
 from binance.client import Client
 from binance.enums import *
 import csv
+import os
 
 from ux_load_idle import *
 from strategy_ichimoku import *
