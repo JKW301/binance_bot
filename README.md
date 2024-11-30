@@ -1,4 +1,19 @@
 
+<<<<<<< HEAD
+# binance_bot
+
+Pour construire l'image Docker :
+
+```bash
+sudo docker build -t binance-bot .
+```
+
+Pour exécuter le conteneur Docker :
+
+```bash
+sudo docker run --env-file .env binance-bot
+```
+=======
 # 🚀 Binance Futures Trading Bot
 > **Note** : Ce bot est à usage éducatif. Utilisez-le avec précaution et testez toutes vos stratégies avant de les appliquer avec des fonds réels.
 Un bot de trading automatisé conçu pour interagir avec l'API Binance Futures.  
@@ -122,3 +137,4 @@ Ce projet est sous licence.
 Les contributions sont les bienvenues ! Si vous souhaitez proposer des améliorations ou signaler des bugs, ouvrez une issue ou un pull request dans ce dépôt.
 
 ---
+>>>>>>> origin/main
