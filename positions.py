@@ -52,7 +52,7 @@ def get_leverage(client, symbol):
 
 def get_symbol_constraints(client, symbol):
     """
-    Récupère les contraintes spécifiques (tickSize, minPrice, etc.) pour un symbole donné.
+    Récupère les contraintes spécifiques (tickSize, stepSize, etc.) pour un symbole donné.
     """
     try:
         exchange_info = client.futures_exchange_info()
@@ -62,13 +62,18 @@ def get_symbol_constraints(client, symbol):
                 for f in s['filters']:
                     if f['filterType'] == 'PRICE_FILTER':
                         constraints['tickSize'] = float(f['tickSize'])
+                    if f['filterType'] == 'LOT_SIZE':
+                        constraints['stepSize'] = float(f['stepSize'])
                     if f['filterType'] == 'MIN_NOTIONAL':
                         constraints['minNotional'] = float(f['notional'])
                 return constraints
+        print(f"[ERREUR] Symbole {symbol} introuvable dans les informations de l'échange.")
+        return None
     except Exception as e:
         print(f"[ERREUR] Impossible de récupérer les contraintes du symbole {symbol} : {e}")
         return None
-    
+
+
 def get_symbol_info(client, symbol):
     exchange_info = client.futures_exchange_info()
     for s in exchange_info['symbols']:
@@ -103,8 +108,9 @@ def calculate_quantity(capital, entry_price, percentage, tick_size, step_size, m
     # Calcul initial de la quantité
     quantity = capital_engaged / entry_price
 
-    # Ajustement avec stepSize (lotSize)
-    quantity = math.floor(quantity / step_size) * step_size
+    # Ajustement avec stepSize
+    if step_size:
+        quantity = math.floor(quantity / step_size) * step_size
 
     # Vérification de la valeur notionnelle minimale
     notional = quantity * entry_price
@@ -113,6 +119,7 @@ def calculate_quantity(capital, entry_price, percentage, tick_size, step_size, m
         return 0.0
 
     return quantity
+
 
 def debug_open_orders(client, symbol):
     """
