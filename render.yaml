@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: TradingBot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
